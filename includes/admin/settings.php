@@ -67,10 +67,9 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
         $this->init_form_fields();
         // Load stock hold option
         if (is_admin() && current_user_can('manage_options')) {
-            $this->init_environment_config();
             $this->verify_client_status();
         }
-
+        $this->init_environment_config();
         $this->init_settings();
 
 
