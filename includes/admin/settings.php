@@ -86,6 +86,57 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
         ), 99, 1);
     }
 
+
+    private function get_safe_user_agent()
+    {
+        $user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'WordPress';
+        return sanitize_text_field(substr($user_agent, 0, 255)); // Limit length
+    }
+
+    /**
+     * Get standard API headers for all Flexiown API requests
+     *
+     * @param array $additional_headers Optional additional headers to merge
+     * @return array Standard headers array
+     */
+    private function get_api_headers($additional_headers = array())
+    {
+        $default_headers = array(
+            'Content-Type' => 'application/json',
+            'api-key' => $this->get_option('merchant_api_key'),
+            'api-version' => $this->version,
+            'user-agent' => $this->get_safe_user_agent(),
+            'environment' => '{"woocommerce_version": "' . WC_VERSION . '","php_version":"' . phpversion() . '"}'
+        );
+
+        return array_merge($default_headers, $additional_headers);
+    }
+
+    /**
+     * Get standard API request arguments
+     *
+     * @param string $method HTTP method (GET, POST, etc.)
+     * @param string $body Request body (optional)
+     * @param array $additional_headers Additional headers (optional)
+     * @return array Complete wp_remote_* arguments
+     */
+    private function get_api_args($method = 'GET', $body = null, $additional_headers = array())
+    {
+        $args = array(
+            'method' => strtoupper($method),
+            'headers' => $this->get_api_headers($additional_headers),
+            'timeout' => 30,
+        );
+
+        if ($body !== null) {
+            $args['body'] = $body;
+        }
+
+        return $args;
+    }
+
+
+
     /**
      * Determine if the gateway still requires setup.
      *
@@ -296,16 +347,7 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
 
         $verify_merchant = wp_remote_get(
             $this->merchant_url,
-            array(
-                'headers' => array(
-                    'Content-Type' => 'application/json',
-                    'api-key' => $this->get_option('merchant_api_key'),
-                    'api-version' => $this->version,
-                    'user-agent' => $_SERVER['HTTP_USER_AGENT'],
-                    'environment' => '{"woocommerce_version": "' . WC_VERSION . '","php_version":"' . phpversion() . '"}'
-                ),
-                'timeout' => 30
-            )
+            $this->get_api_args('GET')
         );
 
 
@@ -505,22 +547,13 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
         }
 
         $OrderBody = $this->transaction_payload($order, $items, $order_id, $shipping_total);
-        $order_args = array(
-            'method' => 'POST',
-            'headers' => array(
-                'Content-Type' => 'application/json',
-                'api-key' => $this->get_option('merchant_api_key'),
-                'api-version' => $this->version,
-                'user-agent' => $_SERVER['HTTP_USER_AGENT'],
-                'environment' => '{"woocommerce_version": "' . WC_VERSION . '","php_version":"' . phpversion() . '"}'
-            ),
-            'timeout' => 30,
-            'body' => $OrderBody,
+
+        $this->flexiown_log('POST Order request: ' . print_r($OrderBody, true), true);
+
+        $order_response = wp_remote_post(
+        $this->url, 
+        $this->get_api_args('POST', $OrderBody)
         );
-
-        $this->flexiown_log('POST Order request: ' . print_r($order_args, true), true);
-
-        $order_response = wp_remote_post($this->url, $order_args);
 
         $order_body = json_decode(wp_remote_retrieve_body($order_response));
         $this->flexiown_log('POST Order response: ' . print_r($order_body, true), true);
@@ -591,47 +624,51 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
 
     public function transaction_payload($order, $items, $order_id, $shipping_total)
     {
-        $OrderBodyString = '{
-					"customer": {
-						"first_name":  "' . $order->billing_first_name . '",
-						"last_name":  "' . $order->billing_last_name . '",
-						"email":  "' . $order->billing_email . '",
-						"mobile": "' . $order->billing_phone . '"
-					},
-					"shipping_address": {
-						"type": "residential",
-						"building": "' . $order->shipping_address_1 . ' ",
-						"street": "' . $order->shipping_address_2 . '",
-						"suburb": "' . $order->shipping_city . '",
-						"city": "' . $order->shipping_city . '",
-						"province": "' . $order->shipping_state . '",
-						"country": "' . $order->shipping_country . '",
-						"postal_code": "' . $order->shipping_postcode . '",
-						"confirmed": false
-					},
-					"billing_address": {
-						"type": "residential",
-						"building": "' . $order->billing_address_1 . ' ",
-						"street": "' . $order->billing_address_2 . '",
-						"suburb": "' . $order->billing_city . '",
-						"city": "' . $order->billing_city . '",
-						"province": "' . $order->billing_state . '",
-						"country": "' . $order->billing_country . '",
-						"postal_code": "' . $order->billing_postcode . '",
-						"confirmed": false
-					},
-					"products": ';
+        // Sanitize all customer data
+        $customer_data = array(
+            'first_name' => sanitize_text_field($order->billing_first_name),
+            'last_name' => sanitize_text_field($order->billing_last_name),
+            'email' => sanitize_email($order->billing_email),
+            'mobile' => sanitize_text_field($order->billing_phone)
+        );
+
+        // Sanitize shipping address
+        $shipping_address = array(
+            'type' => 'residential',
+            'building' => sanitize_text_field($order->shipping_address_1) . ' ',
+            'street' => sanitize_text_field($order->shipping_address_2),
+            'suburb' => sanitize_text_field($order->shipping_city),
+            'city' => sanitize_text_field($order->shipping_city),
+            'province' => sanitize_text_field($order->shipping_state),
+            'country' => sanitize_text_field($order->shipping_country),
+            'postal_code' => sanitize_text_field($order->shipping_postcode),
+            'confirmed' => false
+        );
+
+        // Sanitize billing address
+        $billing_address = array(
+            'type' => 'residential',
+            'building' => sanitize_text_field($order->billing_address_1) . ' ',
+            'street' => sanitize_text_field($order->billing_address_2),
+            'suburb' => sanitize_text_field($order->billing_city),
+            'city' => sanitize_text_field($order->billing_city),
+            'province' => sanitize_text_field($order->billing_state),
+            'country' => sanitize_text_field($order->billing_country),
+            'postal_code' => sanitize_text_field($order->billing_postcode),
+            'confirmed' => false
+        );
+
+        // Create the seed value base exactly as before
         $seed_value_base = json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         foreach ($items as $item) {
             $seed_value_base .= $item[0];
         }
-        $OrderBodyString .= json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $OrderBodyString = rtrim($OrderBodyString, ",");
 
+        // Store the trust seed in order meta (same as before)
         $order->update_meta_data('flexiown_trust_seed', base64_encode($seed_value_base));
         $order->save_meta_data();
 
-
+        // Get active store location (same as before)
         $active_store_location = '';
         $store_id = get_option('active_store_location');
         if ($store_id) {
@@ -639,23 +676,33 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
             $active_store_location = $store->post_title;
         }
 
-        $OrderBodyString .= ',
-					"redirects": {
-						"order_id": "' . $order_id . '",
-						"trust_value": "' . hash('md5', $order_id) . '",
-						"trust_seed": "' . get_post_meta(self::get_order_prop($order, 'id'), 'flexiown_trust_seed', true) . '",
-						"success_redirect_url": "' . $this->get_return_url($order) . '&order_id=' . $order_id . '&wc-api=WC_Gateway_Flexiown", 
-						"failure_redirect_url": "' . $this->get_return_url($order) . '&status=cancelled&wc-api=WC_Gateway_Flexiown",
-						"final_amount": ' . number_format($order->get_total(), 2, '.', '') . ',
-						"tax_amount": ' . $order->get_total_tax() . ',
-						"shipping_amount":' . $shipping_total . ', 
-						"discount": "0",
-						"merchant_store": "' . $active_store_location . '"
-					}
-					
-					}';
-        return $OrderBodyString;
+        // Create redirects object with sanitized data
+        $redirects = array(
+            'order_id' => sanitize_text_field($order_id),
+            'trust_value' => hash('md5', $order_id),
+            'trust_seed' => get_post_meta(self::get_order_prop($order, 'id'), 'flexiown_trust_seed', true),
+            'success_redirect_url' => $this->get_return_url($order) . '&order_id=' . $order_id . '&wc-api=WC_Gateway_Flexiown',
+            'failure_redirect_url' => $this->get_return_url($order) . '&status=cancelled&wc-api=WC_Gateway_Flexiown',
+            'final_amount' => number_format($order->get_total(), 2, '.', ''),
+            'tax_amount' => $order->get_total_tax(),
+            'shipping_amount' => $shipping_total,
+            'discount' => '0',
+            'merchant_store' => sanitize_text_field($active_store_location)
+        );
+
+        // Build the complete order data structure
+        $order_data = array(
+            'customer' => $customer_data,
+            'shipping_address' => $shipping_address,
+            'billing_address' => $billing_address,
+            'products' => $items, // This is already an array from build_product_list()
+            'redirects' => $redirects
+        );
+
+        // Return JSON exactly as before but now securely encoded
+        return json_encode($order_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
+
 
     /**
      * Reciept page.
@@ -852,18 +899,10 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
     public function validate_transaction_status($order)
     {
 
+        $transaction_id = get_post_meta(self::get_order_prop($order, 'id'), 'flexiown_transaction_id', true);
         $verify_transaction = wp_remote_get(
-            $this->status_url . '' . get_post_meta(self::get_order_prop($order, 'id'), 'flexiown_transaction_id', true),
-            array(
-                'headers' => array(
-                    'Content-Type' => 'application/json',
-                    'api-key' => $this->get_option('merchant_api_key'),
-                    'api-version' => $this->version,
-                    'user-agent' => $_SERVER['HTTP_USER_AGENT'],
-                    'environment' => '{"woocommerce_version": "' . WC_VERSION . '","php_version":"' . phpversion() . '"}'
-                ),
-                'timeout' => 30
-            )
+            $this->status_url . $transaction_id,
+            $this->get_api_args('GET')
         );
         $status = json_decode(wp_remote_retrieve_body($verify_transaction));
         $this->flexiown_log('transaction status: ' . print_r($status, true), false);
@@ -991,7 +1030,7 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
                 'Content-Type' => 'application/json',
                 'api-key' => $this->get_option('merchant_api_key'),
                 'api-version' => $this->version,
-                'user-agent' => $_SERVER['HTTP_USER_AGENT'],
+                'user-agent' => $this->get_safe_user_agent(),
                 'environment' => '{"woocommerce_version": "' . WC_VERSION . '","php_version":"' . phpversion() . '"}'
             ),
             'timeout' => 30
@@ -1031,22 +1070,13 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
         $payload = rtrim($payload, ",");
         $payload .= ']';
 
-        //$this->flexiown_log('POST product lookup: ' . print_r($payload, true), false);
 
-        $response = wp_remote_post($this->validate_url, array(
-            'body' => $payload,
-            'headers' => array(
-                'Content-Type' => 'application/json',
-                'api-key' => $this->get_option('merchant_api_key'),
-                'api-version' => $this->version,
-                'user-agent' => $_SERVER['HTTP_USER_AGENT'],
-                'environment' => '{"woocommerce_version": "' . WC_VERSION . '","php_version":"' . phpversion() . '"}'
-            ),
-            'timeout' => 30
-        ));
+        $response = wp_remote_post(
+        $this->validate_url, 
+        $this->get_api_args('POST', $payload)
+        );
 
         $result = json_decode(wp_remote_retrieve_body($response));
-        //  $this->flexiown_log('POST lookup Request: ' . print_r($payload, true), false);
         $this->flexiown_log('POST lookup response: ' . print_r($result, true), false);
 
 
@@ -1080,17 +1110,11 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
 			"alt_trust_value": "' . $alt_trust_value . '"
 		}';
 
-        $response = wp_remote_post($this->status_url . '' . get_post_meta(self::get_order_prop($order, 'id'), 'flexiown_transaction_id', true), array(
-            'body' => $payload,
-            'headers' => array(
-                'Content-Type' => 'application/json',
-                'api-key' => $this->get_option('merchant_api_key'),
-                'api-version' => $this->version,
-                'user-agent' => $_SERVER['HTTP_USER_AGENT'],
-                'environment' => '{"woocommerce_version": "' . WC_VERSION . '","php_version":"' . phpversion() . '"}'
-            ),
-            'timeout' => 30
-        ));
+        $transaction_id = get_post_meta(self::get_order_prop($order, 'id'), 'flexiown_transaction_id', true);
+        $response = wp_remote_post(
+            $this->status_url . $transaction_id, 
+            $this->get_api_args('POST', $payload)
+        );
 
         $this->flexiown_log('POST transaction status change: ' . print_r($payload, true), false);
 
@@ -1106,22 +1130,5 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
 
             return false;
         }
-
-        //TODO: we are pending a response object from Stephan
-        // $this->flexiown_log('POST transaction status change: ' . print_r($result, true), false);
-        // if (isset($result->accepted) && $result->accepted == true) {
-        // 	return $result;
-        // } else {
-        // 	$this->flexiown_log('Sending error email notification for Flexiown Product Lookup error:', false);
-        // 	$body =
-        // 		"Hi,\n\n" .
-        // 		"A failure occured when attempting to notify flexiown of an order status change\n" .
-        // 		"Order ID: " . self::get_order_prop($order, 'id') . "\n" .
-        // 		"------------------------------------------------------------\n";
-        // 	$body .= $result->message;
-        // 	$this->flexiown_log($body, true);
-
-        // 	return false;
-        // }
     }
 };
