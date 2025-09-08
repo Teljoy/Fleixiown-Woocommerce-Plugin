@@ -4,10 +4,10 @@
     "version" : "2.0.0",
     "author"  : "Flexiown",
     "author_uri" : "https://flexiown.co.za",
-    "download_url" : "https://github.com/Teljoy/Fleixiown-Woocommerce-Plugin/raw/main/teljoy-woocommerce-payment-gateway.zip",
+    "download_url" : "https://github.com/Teljoy/Fleixiown-Woocommerce-Plugin/raw/main/teljoy-flexiown.zip",
     "sections" : {
         "description" : "Use Flexiown as a payment processor for WooCommerce.",
-        "changelog": "1.0.11 improve api error handling \n  1.0.10 Fix shortcode error on product page \n 1.0.8 Added Shortcode error handling \n 1.0.7 Logo update \n 1.0.6 fix javascript injection into payload \n 1.0.4 - Adds support to download logs from Flexiown Gateway Settings page \n 1.0.4 - removes paramater security check due to api verification \n 1.0.5 update status paths "
+        "changelog": "2.0.0 Full Compliance upgrade \n 1.0.11 improve api error handling \n  1.0.10 Fix shortcode error on product page \n 1.0.8 Added Shortcode error handling \n 1.0.7 Logo update \n 1.0.6 fix javascript injection into payload \n 1.0.4 - Adds support to download logs from Flexiown Gateway Settings page \n 1.0.4 - removes paramater security check due to api verification \n 1.0.5 update status paths "
     },
     "icons" : {
 		"1x" : "http://w-shadow.com/files/external-update-example/assets/icon-128x128.png",
