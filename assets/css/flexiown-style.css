@@ -1,0 +1,20 @@
+.rejected_flexiown_item {
+		background-color: #979797 !important;
+		padding: 4px 4px;
+		border-radius: 5px;
+		color: white;
+}
+
+.flexiown #flexiowntext img {
+	float: left;
+	margin-right: 20px;
+	margin-bottom: 50px;
+	max-width: 80px;
+	height: auto;
+}
+
+
+.flexi-cart-logo {
+	position: relative;
+	bottom: -7px;
+}
