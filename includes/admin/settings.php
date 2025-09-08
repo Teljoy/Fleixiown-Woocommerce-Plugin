@@ -40,7 +40,7 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
      */
     public function __construct()
     {
-        $this->init_environment_config();
+
         $this->id                             = 'flexiown';
         $this->version                        = FLEXIOWN_VERSION;
         $this->method_title                   = __('Flexiown', 'flexiown');
@@ -51,11 +51,6 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
         $this->available_currencies           = (array)apply_filters('woocommerce_gateway_flexiown_available_currencies', array('ZAR'));
         $this->supports                       = array('products');
         $this->merchant_api_key               = $this->get_option('merchant_api_key');
-        $this->url                            = $this->environments['api_url'] . 'payment/create';
-        $this->validate_url                   = $this->environments['api_url'] . 'product';
-        $this->status_url                     = $this->environments['api_url'] . 'status/';
-        $this->merchant_url                   = $this->environments['api_url'] . 'merchant/';
-        $this->api_url                        = $this->environments['api_url'];
         $this->title                          = $this->get_option('title') ? $this->get_option('title') : __('Flexiown', 'woo_flexiown');
         $this->debug_email                    = $this->get_option('debug_email', get_option('admin_email'));
         $this->response_url                   = add_query_arg('wc-api', 'WC_Gateway_Flexiown', home_url('/'));
@@ -70,13 +65,16 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
 
         //setup admin area
         $this->init_form_fields();
+        // Load stock hold option
+        if (is_admin() && current_user_can('manage_options')) {
+            $this->init_environment_config();
+            $this->verify_client_status();
+        }
+
         $this->init_settings();
 
 
-        // Load stock hold option
-        if (is_admin() && current_user_can('manage_options')) {
-            $this->verify_client_status();
-        }
+
 
         add_action('admin_notices', array($this, 'flexiown_admin_notices'));
         add_action('woocommerce_update_options_payment_gateways_' . $this->id, array($this, 'process_admin_options'));
@@ -87,8 +85,6 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
             $this,
             'check_cart_line_item_validity'
         ), 99, 1);
-
-        
     }
 
     /**
@@ -277,15 +273,19 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
      */
     public function init_environment_config()
     {
-        if (empty($this->environments)) {
-            //config separated for ease of editing
-            require('config.php');
-            if ($this->get_option('staging') == 'yes') {
-                $this->environments = $environments["staging"];
-            } else {
-                $this->environments = $environments["production"];
-            }
+        //    $this->flexiown_log('trigger en: ' . print_r($this->get_option('staging'), true), false);
+        require('config.php');
+        if ($this->get_option('staging') == 'yes') {
+            $this->environments = $environments["staging"];
+        } else {
+            $this->environments = $environments["production"];
         }
+
+        $this->url                            = $this->environments['api_url'] . 'payment/create';
+        $this->validate_url                   = $this->environments['api_url'] . 'product';
+        $this->status_url                     = $this->environments['api_url'] . 'status/';
+        $this->merchant_url                   = $this->environments['api_url'] . 'merchant/';
+        $this->api_url                        = $this->environments['api_url'];
     }
 
     private function verify_client_status()
@@ -309,9 +309,10 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
             )
         );
 
-        // $this->flexiown_log('verify merchant status header: ' . print_r($this->flexiown_headers, true), false);
+
+        // $this->flexiown_log('environmentt: ' . print_r($this->merchant_url, true), false);
         $status = json_decode(wp_remote_retrieve_body($verify_merchant));
-        $this->flexiown_log('verify merchant status: ' . print_r($status->completion_period_expiry, true), false);
+        // $this->flexiown_log('verify merchant status: ' . print_r($status->completion_period_expiry, true), false);
 
         if (is_wp_error($status)) {
             update_option("woocommerce_hold_stock_minutes", $this->flexiown_stock_hold);
@@ -407,7 +408,7 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
             // Check if the store currency is supported by Flexiown
             !in_array(get_woocommerce_currency(), $this->available_currencies) ? 'Your store uses a currency that Flexiown doesnt support yet' : null,
             // Check if user entered the merchant ID
-            //'yes' !== $this->get_option('staging') && empty($this->get_option('merchant_api_key'))  ? 'You forgot to fill your merchant ID' : null,
+            empty($this->get_option('merchant_api_key'))  ? 'You forgot to fill your merchant ID' : null,
             // Check the stock hold time
             //'yes' == $this->get_option('staging') ? sprintf(__('Flexiown test mode is still enabled, Click <strong><a href="%s">here</a></strong> to disable it when you want to start accepting live payment on your site.', 'woo-flexiown'), esc_url(admin_url('admin.php?page=wc-settings&tab=checkout&section=flexiown'))) : null
 
@@ -1125,5 +1126,3 @@ class WC_Gateway_Flexiown extends WC_Payment_Gateway
         // }
     }
 };
-
-
