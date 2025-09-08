@@ -2,10 +2,9 @@
 
 
 /**
- * PRODUCT PAGE SETTINGS TAB
+ * GENERAL SERVICE WIDGETS AND HOOKS
  **/
 
-// : ADD NEW TAB if options enable_product_barcode is yes
 
 $options = get_option('woocommerce_flexiown_settings', 'gets the option');
 

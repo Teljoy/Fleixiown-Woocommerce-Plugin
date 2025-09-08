@@ -2,7 +2,7 @@
 
 /**
  * Register a custom REST API endpoint to retrieve logs and handle responses from api
- * URL: /wp-json/flexiown/v1/webhooks/logbook
+ * URL: /wp-json/flexiown/v1/logbook
  * Method: GET
  * Purpose: Retrieve latest logs
  */
@@ -50,7 +50,7 @@ add_action('rest_api_init', 'flexiown_register_stores_endpoint');
 
 function flexiown_register_logbook_webhook_endpoint()
 {
-    register_rest_route('fo/v1', '/webhooks/logbook', array(
+    register_rest_route('fo/v1', '/logbook', array(
         'methods' => 'GET',
         'callback' => 'flexiown_fetch_logbook',
         'permission_callback' => 'flexiown_webhook_permissions',
@@ -388,6 +388,7 @@ function flexiown_webhook_permissions(WP_REST_Request $request)
         return true;
     } else {
         return true;
+        // enable after demo
         //return new WP_Error('forbidden', 'API key not configured or invalid', array('status' => 403));
     }
 }
