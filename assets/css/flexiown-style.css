@@ -18,3 +18,23 @@
 	position: relative;
 	bottom: -7px;
 }
+
+/* Fallback rules to ensure rejected items are visibly grey in legacy and block carts */
+.woocommerce-cart .cart_item.rejected_flexiown_item,
+.woocommerce table.shop_table.cart .rejected_flexiown_item,
+.woocommerce table.shop_table.cart .rejected_flexiown_item td,
+.woocommerce-cart .cart_item.rejected_flexiown_item .product-name {
+	background-color: #979797 !important;
+	color: #ffffff !important;
+}
+
+/* Blocks cart class fallback (also defined inline in PHP) */
+.rejected_flexiown_item_blocks {
+	opacity: 0.6;
+	background-color: #dcdcdc;
+	color: #222;
+}
+
+.rejected_flexiown_item img {
+	opacity: 0.8;
+}

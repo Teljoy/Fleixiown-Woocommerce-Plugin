@@ -280,100 +280,135 @@ function flexiown_fetch_logbook(WP_REST_Request $request)
     if (empty($log_files)) {
         return new WP_Error('no_logs', 'No log files found', array('status' => 404));
     }
-    
-    // OPEN THE LATEST LOG FILE AND PARSE AND RETURN ITS CONTENT AS JSON
-    $latest_log_file = end($log_files); // This is now the full file path
-    
-    if (!file_exists($latest_log_file)) {
-        return new WP_Error('file_not_found', 'Log file not found: ' . $latest_log_file, array('status' => 404));
-    }
-    
-    $log_contents = file_get_contents($latest_log_file);
-    if ($log_contents === false) {
-        return new WP_Error('read_error', 'Could not read log file', array('status' => 500));
-    }
-    
-    $log_lines = explode("\n", $log_contents);
-    $filtered_logs = [];
-    
-    foreach ($log_lines as $line) {
-        if (empty(trim($line))) continue; // Skip empty lines
-        
-        // Only process lines that contain flexiown-related keywords
-        $flexiown_keywords = ['flexiown', 'Flexiown', 'FLEXIOWN', 'gateway', 'payment', 'api'];
-        $contains_flexiown = false;
-        foreach ($flexiown_keywords as $keyword) {
-            if (stripos($line, $keyword) !== false) {
-                $contains_flexiown = true;
-                break;
+    // We'll parse all matching files (files with "flexiown" in the filename) and
+    // combine their entries. Files returned by get_log_files() are sorted oldest->newest.
+    $all_entries = array();
+
+    foreach ($log_files as $file_path) {
+        if (!file_exists($file_path)) continue;
+
+        $log_contents = file_get_contents($file_path);
+        if ($log_contents === false) continue;
+
+        $lines = preg_split('/\r?\n/', $log_contents);
+
+        // Group multiline entries: lines starting with timestamp begin a new entry
+        $groups = array();
+        $current = null;
+        foreach ($lines as $line) {
+            if ($line === null) continue;
+            $trim = trim($line);
+            if ($trim === '') continue;
+
+            if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(\w+)\s+(.*)$/', $line, $m)) {
+                // start a new group
+                if ($current !== null) $groups[] = $current;
+                $current = array(
+                    'date' => $m[1],
+                    'level' => $m[2],
+                    'message' => $m[3],
+                );
+            } else {
+                // continuation line: append to previous message or create a fallback entry
+                if ($current === null) {
+                    $current = array(
+                        'date' => '',
+                        'level' => 'UNKNOWN',
+                        'message' => $line,
+                    );
+                } else {
+                    $current['message'] .= '\n' . $line;
+                }
             }
         }
-        
-        if (!$contains_flexiown) {
-            continue; // Skip non-flexiown logs
-        }
-        
-        // WooCommerce log format: YYYY-MM-DD HH:MM:SS LEVEL message
-        // Example: 2025-09-08 10:30:45 INFO This is a log message
-        if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(\w+)\s+(.*)/', $line, $matches)) {
+        if ($current !== null) $groups[] = $current;
+
+        // Normalize and attempt to decode JSON fragments in messages
+        foreach ($groups as $entry) {
             // If timestamp filter is provided, check it
-            if ($timestamp) {
-                $log_date = strtotime($matches[1]);
+            if ($timestamp && !empty($entry['date'])) {
+                $log_date = strtotime($entry['date']);
                 if ($log_date < strtotime($timestamp)) {
                     continue; // Skip logs older than timestamp
                 }
             }
-            
-            $filtered_logs[] = array(
-                'date' => $matches[1],
-                'level' => $matches[2], 
-                'message' => trim($matches[3])
-            );
-        } else {
-            // Fallback for other formats or continuation lines (but still flexiown-related)
-            $filtered_logs[] = array(
-                'date' => '',
-                'level' => 'UNKNOWN',
-                'message' => trim($line)
+
+            $msg = trim($entry['message']);
+
+            // If message is a quoted string like "..." or contains escaped JSON, try to json_decode
+            $decoded = json_decode($msg, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                // Use decoded value (could be string, array, object)
+                $msg_val = $decoded;
+            } else {
+                // Try stripping enclosing quotes and unescaping
+                if (preg_match('/^"(.*)"$/s', $msg, $m2)) {
+                    $stripped = stripcslashes($m2[1]);
+                    $decoded2 = json_decode($stripped, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $msg_val = $decoded2;
+                    } else {
+                        $msg_val = $stripped;
+                    }
+                } else {
+                    $msg_val = $msg;
+                }
+            }
+
+            // If date is empty, fall back to file modification time
+            $date_val = $entry['date'];
+            if (empty($date_val)) {
+                $date_val = date('Y-m-d H:i:s', filemtime($file_path));
+            }
+
+            $all_entries[] = array(
+                'date' => $date_val,
+                'level' => !empty($entry['level']) ? $entry['level'] : 'UNKNOWN',
+                'message' => $msg_val,
+                'source_file' => basename($file_path),
             );
         }
     }
 
-    return rest_ensure_response(array_values($filtered_logs));
+    // Sort by date desc (newest first). If date parsing fails, treat as oldest.
+    usort($all_entries, function ($a, $b) {
+        $ta = strtotime($a['date']) ?: 0;
+        $tb = strtotime($b['date']) ?: 0;
+        return $tb <=> $ta;
+    });
+
+    return rest_ensure_response(array_values($all_entries));
 }
 
 
 function get_log_files()
 {
     $log_files = array();
-    
-    // Get WooCommerce logger
-    $logger = wc_get_logger();
-    
+
     // Get the log directory from WooCommerce
-    $log_dir = trailingslashit(wp_upload_dir()['basedir']) . 'wc-logs/';
-    
+    $upload_dir = wp_upload_dir();
+    $log_dir = trailingslashit($upload_dir['basedir']) . 'wc-logs/';
+
     // Alternative method if above doesn't work
     if (!is_dir($log_dir)) {
-        // Try to get from WC constants
         if (defined('WC_LOG_DIR')) {
             $log_dir = trailingslashit(WC_LOG_DIR);
-        } else {
-            // Fallback to default WooCommerce location
-            $upload_dir = wp_upload_dir();
-            $log_dir = trailingslashit($upload_dir['basedir']) . 'wc-logs/';
         }
     }
 
+    if (!is_dir($log_dir)) return array();
+
     // Get all flexiown log files in the directory
     $files = glob($log_dir . '*flexiown*.log');
+    if (empty($files)) return array();
 
-    // Loop through the files and add them to the log files array
-    foreach ($files as $file) {
-        $log_files[basename($file)] = $file; // Store full path
-    }
+    // Sort files by modification time (oldest -> newest)
+    usort($files, function ($a, $b) {
+        return filemtime($a) <=> filemtime($b);
+    });
 
-    return $log_files;
+    // Return full paths (index-based array)
+    return $files;
 }
 
 
@@ -387,8 +422,8 @@ function flexiown_webhook_permissions(WP_REST_Request $request)
     if (isset($options['merchant_api_key']) && $options['merchant_api_key'] === $api_key) {
         return true;
     } else {
-        return true;
+        // return true;
         // enable after demo
-        //return new WP_Error('forbidden', 'API key not configured or invalid', array('status' => 403));
+        return new WP_Error('forbidden', 'API key not configured or invalid', array('status' => 403));
     }
 }

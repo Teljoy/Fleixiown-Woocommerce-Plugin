@@ -360,13 +360,17 @@ function get_flexiown_cart_warnings_ajax() {
         if (!$items[$position]->accepted) {
             $flexiown_items[] = $cart_item_key;
             $rejected_keys[] = $cart_item_key;
+            // also collect permalink for fallback matching in blocks
+            $product_id = isset($cart_item['product_id']) ? $cart_item['product_id'] : ($cart_item['data'] && method_exists($cart_item['data'], 'get_id') ? $cart_item['data']->get_id() : 0);
+            $rejected_map[$cart_item_key] = $product_id ? get_permalink($product_id) : '';
         }
         $position++;
     }
     
     wp_send_json_success(array(
         'has_warnings' => !empty($flexiown_items),
-        'rejected_keys' => $rejected_keys
+        'rejected_keys' => $rejected_keys,
+        'rejected_map' => isset($rejected_map) ? $rejected_map : array()
     ));
 }
 add_action('wp_ajax_get_flexiown_cart_warnings', 'get_flexiown_cart_warnings_ajax');
@@ -563,15 +567,23 @@ function highlight_flexiown_items_in_cart()
             
             $notice_text = __('To allow Flexiown as a payment option, remove the items below highlighted in <span class="rejected_flexiown_item">grey</span><br> or click the "Checkout with Flexiown" button.', 'your-text-domain');
             $notice_text .= '<br><button id="flexiown-remove-rejected-btn-legacy" class="button remove-flexiown-items-button">' . __('Checkout with Flexiown', 'your-text-domain') . '</button>';
-            $notice_text .= '<script>
+            // Print the notice without inline scripts. Attach the click handler in the footer so the script executes rather than being output as text.
+            wc_print_notice($notice_text, 'notice');
+
+            // Add footer script to bind click handler for legacy cart remove button. This prevents the JS from being injected into the notice body.
+            add_action('wp_footer', function() use ($rejected_keys_js) {
+                // Only output on cart page
+                if (!is_cart()) return;
+                ?>
+                <script>
                 jQuery(document).ready(function($) {
-                    var rejectedKeys = ' . $rejected_keys_js . ';
-                    $("#flexiown-remove-rejected-btn-legacy").on("click", function(e) {
+                    var rejectedKeys = <?php echo $rejected_keys_js; ?>;
+                    $("#flexiown-remove-rejected-btn-legacy").off('click.flexiown').on("click.flexiown", function(e) {
                         e.preventDefault();
                         var button = $(this);
                         button.text("Removing items...").prop("disabled", true);
-                        
-                        $.post("' . admin_url('admin-ajax.php') . '", {
+
+                        $.post("<?php echo admin_url('admin-ajax.php'); ?>", {
                             action: "remove_flexiown_rejected_items",
                             rejected_keys: rejectedKeys
                         }, function(response) {
@@ -590,8 +602,9 @@ function highlight_flexiown_items_in_cart()
                         });
                     });
                 });
-            </script>';
-            wc_print_notice($notice_text, 'notice');
+                </script>
+                <?php
+            }, 99);
         }
     }
 }
@@ -686,8 +699,37 @@ function highlight_flexiown_items_in_cart_blocks() {
                             
                             // Highlight rejected items
                             response.data.rejected_keys.forEach(function(cartKey) {
-                                // Try to find cart item by various selectors
-                                $('.wc-block-cart-item[data-key="' + cartKey + '"]').addClass('rejected_flexiown_item_blocks');
+                                // Try to find cart item by data-key first
+                                var $row = $('.wc-block-cart-item[data-key="' + cartKey + '"]');
+                                if ($row.length) {
+                                    $row.addClass('rejected_flexiown_item_blocks');
+                                    return;
+                                }
+
+                                // Fallback: try permalink matching from rejected_map
+                                var permalink = (response.data.rejected_map && response.data.rejected_map[cartKey]) ? response.data.rejected_map[cartKey] : '';
+                                if (permalink) {
+                                    // Exact href match
+                                    var $a = $('a[href="' + permalink + '"]');
+                                    if ($a.length) {
+                                        $a.closest('tr, .wc-block-cart-items_row, .wc-block-cart-item').addClass('rejected_flexiown_item_blocks');
+                                        return;
+                                    }
+
+                                    // Partial match (URL slug) as last resort
+                                    try {
+                                        var slug = permalink.replace(/(^.*\/)|([\/?].*$)/g, '');
+                                        if (slug) {
+                                            var $a2 = $('a[href*="' + slug + '"]');
+                                            if ($a2.length) {
+                                                $a2.closest('tr, .wc-block-cart-items_row, .wc-block-cart-item').addClass('rejected_flexiown_item_blocks');
+                                                return;
+                                            }
+                                        }
+                                    } catch (e) {
+                                        // ignore
+                                    }
+                                }
                             });
                         }
                     });
@@ -710,28 +752,28 @@ function highlight_flexiown_items_in_cart_blocks() {
 
 // AJAX handler for removing rejected items from cart
 function remove_flexiown_rejected_items_ajax() {
-    file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - AJAX remove_flexiown_rejected_items_ajax called' . "\n", FILE_APPEND);
+    // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - AJAX remove_flexiown_rejected_items_ajax called' . "\n", FILE_APPEND);
     
     // Debug what we received
-    file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - POST data: ' . print_r($_POST, true) . "\n", FILE_APPEND);
+    // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - POST data: ' . print_r($_POST, true) . "\n", FILE_APPEND);
     
     // Get the rejected keys from the request (passed from the warning system)
     $rejected_keys = isset($_POST['rejected_keys']) ? $_POST['rejected_keys'] : array();
     
     // Debug the rejected keys
-    file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Rejected keys received: ' . print_r($rejected_keys, true) . "\n", FILE_APPEND);
-    file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Rejected keys type: ' . gettype($rejected_keys) . "\n", FILE_APPEND);
-    file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Rejected keys count: ' . (is_array($rejected_keys) ? count($rejected_keys) : 'not array') . "\n", FILE_APPEND);
+    // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Rejected keys received: ' . print_r($rejected_keys, true) . "\n", FILE_APPEND);
+    // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Rejected keys type: ' . gettype($rejected_keys) . "\n", FILE_APPEND);
+    // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Rejected keys count: ' . (is_array($rejected_keys) ? count($rejected_keys) : 'not array') . "\n", FILE_APPEND);
     
     if (empty($rejected_keys)) {
-        file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - No rejected keys provided, doing fresh API call' . "\n", FILE_APPEND);
+        // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - No rejected keys provided, doing fresh API call' . "\n", FILE_APPEND);
         
         // Fallback: Do the API call if no keys provided
         $gateway = new WC_Gateway_Flexiown();
         $items = $gateway->api_bulk_product_lookup(WC()->cart->get_cart());
         
         if ($items === null || ($items->statusCode !== null && $items->statusCode == 500)) {
-            file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - API call failed' . "\n", FILE_APPEND);
+            // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - API call failed' . "\n", FILE_APPEND);
             wp_send_json_error('API call failed');
             return;
         }
@@ -746,27 +788,27 @@ function remove_flexiown_rejected_items_ajax() {
         }
     }
     
-    file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Have ' . count($rejected_keys) . ' rejected keys to remove: ' . implode(', ', $rejected_keys) . "\n", FILE_APPEND);
+    // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Have ' . count($rejected_keys) . ' rejected keys to remove: ' . implode(', ', $rejected_keys) . "\n", FILE_APPEND);
     
     $removed_items = array();
     
     // Remove the rejected items
     foreach ($rejected_keys as $cart_item_key) {
-        file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Attempting to remove item: ' . $cart_item_key . "\n", FILE_APPEND);
+        // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Attempting to remove item: ' . $cart_item_key . "\n", FILE_APPEND);
         
         $removed = WC()->cart->remove_cart_item($cart_item_key);
         if ($removed) {
             $removed_items[] = $cart_item_key;
-            file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Successfully removed: ' . $cart_item_key . "\n", FILE_APPEND);
+            // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Successfully removed: ' . $cart_item_key . "\n", FILE_APPEND);
         } else {
-            file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Failed to remove: ' . $cart_item_key . "\n", FILE_APPEND);
+            // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Failed to remove: ' . $cart_item_key . "\n", FILE_APPEND);
         }
     }
     
     // Save the cart
     WC()->cart->set_session();
     
-    file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Cart saved. Removed ' . count($removed_items) . ' items' . "\n", FILE_APPEND);
+    // file_put_contents(WP_CONTENT_DIR . '/flexiown-debug.log', date('Y-m-d H:i:s') . ' - Cart saved. Removed ' . count($removed_items) . ' items' . "\n", FILE_APPEND);
     
     wp_send_json_success(array(
         'removed_count' => count($removed_items),

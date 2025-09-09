@@ -157,6 +157,7 @@ function flexiown_init()
 add_action('plugins_loaded', 'flexiown_init', 0);
 
 
+// Add settings link on plugin page
 function flexiown_gateway_plugin_links($links)
 {
     $settings_url = add_query_arg(
@@ -181,7 +182,6 @@ add_filter('plugin_action_links_' . plugin_basename(__FILE__), 'flexiown_gateway
 
 
 // PLUGIN UPDATE CHECKER
-
 require FLEXIOWN_PLUGIN_PATH . 'plugin-update-checker/plugin-update-checker.php';
 use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
 
